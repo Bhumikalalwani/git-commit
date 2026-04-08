@@ -77,8 +77,8 @@ def _load_config() -> Tuple[Dict[str, str], List[str]]:
     api_base = os.getenv("API_BASE_URL", "").strip() or "https://api.openai.com/v1"
     model = os.getenv("MODEL_NAME", "").strip() or "gpt-4o-mini"
     hf_token = (
-        os.getenv("HF_TOKEN", "").strip()
-        or os.getenv("OPENAI_API_KEY", "").strip()
+        os.getenv("OPENAI_API_KEY", "").strip()
+        or os.getenv("HF_TOKEN", "").strip()
         or os.getenv("API_KEY", "").strip()
     )
 
