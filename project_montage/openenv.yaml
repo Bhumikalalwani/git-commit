@@ -1,8 +1,0 @@
-name: montage_env
-description: Sequential Video Editing Environment
-actions: discrete
-observation: structured
-tasks:
-  - highlight
-  - structured
-  - intent

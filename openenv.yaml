@@ -1,0 +1,82 @@
+spec_version: 1
+name: montage_env
+type: environment
+description: >
+  Sequential Video Editing Decision Environment. An agent selects, removes,
+  reorders, and trims video clips to assemble an optimal montage under
+  duration and style constraints. Three tasks span easy to hard difficulty.
+
+runtime:
+  image: montage-openenv:latest
+  dockerfile: Dockerfile
+
+app:
+  port: 7860
+  health_endpoint: /health
+
+actions:
+  type: discrete
+  enum: [select, remove, reorder, trim, finish]
+  description: >
+    select  — add a clip to the timeline
+    remove  — remove a clip from the timeline
+    reorder — swap two clips by index
+    trim    — shorten a clip's duration
+    finish  — end the episode
+
+observation:
+  type: structured
+  fields:
+    - name: available_clips
+      type: list[Clip]
+      description: Clips not yet on the timeline
+    - name: timeline
+      type: list[str]
+      description: Ordered list of clip IDs currently on the timeline
+    - name: remaining_time
+      type: float
+      description: Seconds of budget remaining
+    - name: style
+      type: str
+      description: Target editing style (highlight, emotional, balanced)
+    - name: done
+      type: bool
+      description: Whether the episode has ended
+    - name: reward
+      type: float
+      description: Reward signal in [0.0, 1.0]
+
+tasks:
+  - name: highlight
+    difficulty: easy
+    description: Select clips that maximize importance within a duration budget.
+    clip_count: 15
+    target_duration_range: [20.0, 40.0]
+
+  - name: structured
+    difficulty: medium
+    description: Arrange clips into a coherent narrative under duration constraints.
+    clip_count: 25
+    target_duration_range: [30.0, 50.0]
+
+  - name: intent
+    difficulty: hard
+    description: Style-aware editing with ordering, selection, and trimming constraints.
+    clip_count: 30
+    target_duration_range: [40.0, 60.0]
+
+graders:
+  highlight: graders/grader_easy.py::grade_highlight
+  structured: graders/grader_medium.py::grade_structured
+  intent: graders/grader_hard.py::grade_intent
+
+reward:
+  range: [0.0, 1.0]
+  components:
+    - importance (weighted clip quality)
+    - coherence  (sequential ordering quality)
+    - style      (emotion/motion match to target)
+  penalties:
+    - duration_penalty  (deviation from target duration)
+    - redundancy_penalty (repeated tags across clips)
+    - step_penalty      (efficiency — fewer steps is better)
