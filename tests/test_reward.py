@@ -12,9 +12,9 @@ class TestRewardEngine(unittest.TestCase):
             "clip_002": Clip(id="clip_002", duration=5, importance=0.8, emotion="happiness", motion="medium", tags=["b-roll"]),
         }
 
-    def test_empty_timeline_returns_zero(self):
+    def test_empty_timeline_returns_min(self):
         val, breakdown = self.engine.compute_reward([], self.clips, 15, "balanced", step_count=1)
-        self.assertEqual(val, 0.0)
+        self.assertEqual(val, 0.001)
         self.assertEqual(breakdown.importance, 0.0)
 
     def test_reward_in_unit_range(self):

@@ -19,25 +19,25 @@ class TestGraderEasy(unittest.TestCase):
 
     def test_empty_timeline(self):
         score = grade_highlight([], self.clips, 10)
-        self.assertEqual(score, 0.0)
+        self.assertEqual(score, 0.001)
 
     def test_score_in_range(self):
         score = grade_highlight(["c1", "c2"], self.clips, 20)
-        self.assertGreaterEqual(score, 0.0)
-        self.assertLessEqual(score, 1.0)
+        self.assertGreater(score, 0.0)
+        self.assertLess(score, 1.0)
 
 
 class TestGraderMedium(unittest.TestCase):
     def test_perfect_order(self):
-        self.assertEqual(grade_structured(["c1", "c2"], ["c1", "c2"]), 1.0)
+        self.assertEqual(grade_structured(["c1", "c2"], ["c1", "c2"]), 0.999)
 
     def test_no_overlap(self):
-        self.assertEqual(grade_structured(["c3"], ["c1", "c2"]), 0.0)
+        self.assertEqual(grade_structured(["c3"], ["c1", "c2"]), 0.001)
 
     def test_partial_match(self):
         score = grade_structured(["c1", "c3", "c2"], ["c1", "c2"])
         self.assertGreater(score, 0.0)
-        self.assertLessEqual(score, 1.0)
+        self.assertLess(score, 1.0)
 
 
 class TestGraderHard(unittest.TestCase):
@@ -49,12 +49,12 @@ class TestGraderHard(unittest.TestCase):
 
     def test_score_in_range(self):
         score = grade_intent(["c1"], self.clips, "balanced", ["c1", "c2"])
-        self.assertGreaterEqual(score, 0.0)
-        self.assertLessEqual(score, 1.0)
+        self.assertGreater(score, 0.0)
+        self.assertLess(score, 1.0)
 
-    def test_empty_returns_zero(self):
+    def test_empty_returns_min(self):
         score = grade_intent([], self.clips, "balanced", ["c1", "c2"])
-        self.assertEqual(score, 0.0)
+        self.assertEqual(score, 0.001)
 
 
 if __name__ == "__main__":

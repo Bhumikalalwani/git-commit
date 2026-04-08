@@ -13,7 +13,7 @@ def grade_highlight(predicted_timeline: List[str], clips_map: Dict[str, Clip], t
     Returns a score in [0.0, 1.0].
     """
     if not predicted_timeline:
-        return 0.0
+        return 0.001
 
     selected_importance = sum(
         clips_map[cid].importance for cid in predicted_timeline if cid in clips_map
@@ -36,4 +36,4 @@ def grade_highlight(predicted_timeline: List[str], clips_map: Dict[str, Clip], t
     duration_factor = max(0.0, 1.0 - abs(total_dur - target_duration) / max(target_duration, 1e-9))
     score *= duration_factor
 
-    return min(1.0, max(0.0, round(score, 4)))
+    return min(0.999, max(0.001, round(score, 4)))

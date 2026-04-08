@@ -219,7 +219,7 @@ def run_task(
             llm_status = "greedy"
 
         obs = env.step(action)
-        reward = obs.reward if obs.reward is not None else 0.0
+        reward = _normalize_score(obs.reward if obs.reward is not None else 0.001)
         done = obs.done
         step_count += 1
         rewards.append(reward)
@@ -229,6 +229,8 @@ def run_task(
             ("task_name", task_name),
             ("step", step_count),
             ("action", action.action_type.value),
+            ("grader_score", round(reward, 4)),
+            ("reward_score", round(reward, 4)),
             ("reward", round(reward, 4)),
             ("done", done),
             ("llm_status", llm_status),
@@ -237,13 +239,15 @@ def run_task(
     if not done:
         obs = env.step(Action(action_type=ActionType.FINISH))
         step_count += 1
-        reward = obs.reward if obs.reward is not None else 0.0
+        reward = _normalize_score(obs.reward if obs.reward is not None else 0.001)
         rewards.append(reward)
         _log("[STEP]", OrderedDict([
             ("task_id", task_id),
             ("task_name", task_name),
             ("step", step_count),
             ("action", "finish"),
+            ("grader_score", round(reward, 4)),
+            ("reward_score", round(reward, 4)),
             ("reward", round(reward, 4)),
             ("done", True),
             ("llm_status", "greedy"),

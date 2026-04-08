@@ -24,4 +24,5 @@ def grade_structured(predicted_timeline: List[str], ideal_order: List[str]) -> f
     Uses LCS similarity to measure how close the predicted sequence
     matches the ideal ordering.  Returns a score in [0.0, 1.0].
     """
-    return round(lcs_similarity(predicted_timeline, ideal_order), 4)
+    raw = lcs_similarity(predicted_timeline, ideal_order)
+    return round(min(0.999, max(0.001, raw)), 4)

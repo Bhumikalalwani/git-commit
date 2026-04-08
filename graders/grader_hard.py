@@ -23,7 +23,7 @@ def grade_intent(
     Returns a score in [0.0, 1.0].
     """
     if not predicted_timeline:
-        return 0.0
+        return 0.001
 
     style_match = check_style_alignment(predicted_timeline, clips_map, target_style)
     order_score = lcs_similarity(predicted_timeline, ideal_order)
@@ -32,4 +32,4 @@ def grade_intent(
     selection_score = len(valid_clips) / max(len(ideal_order), 1)
 
     final_score = 0.5 * style_match + 0.3 * order_score + 0.2 * selection_score
-    return round(min(1.0, max(0.0, final_score)), 4)
+    return round(min(0.999, max(0.001, final_score)), 4)

@@ -18,7 +18,7 @@ class RewardEngine:
         weight_overrides: Optional[Dict[str, float]] = None,
     ) -> tuple[float, RewardBreakdown]:
         if not timeline:
-            return 0.0, RewardBreakdown()
+            return 0.001, RewardBreakdown()
 
         w = dict(WEIGHTS)
         if weight_overrides:
@@ -53,7 +53,7 @@ class RewardEngine:
             + w["style"] * style_score
             - w["penalty"] * (duration_penalty + redundancy_penalty + step_penalty)
         )
-        r_val = max(0.0, min(1.0, r_val))
+        r_val = max(0.001, min(0.999, r_val))
 
         breakdown = RewardBreakdown(
             importance=round(importance_score, 4),
