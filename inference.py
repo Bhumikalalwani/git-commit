@@ -44,29 +44,24 @@ MAX_STEPS = 50
 MIN_SCORE = 0.001
 MAX_SCORE = 0.999
 
-SYSTEM_PROMPT = """You are an AI video editor agent. You will receive an observation describing:
-- available_clips: clips you can add to the timeline (each has id, duration, importance, emotion, motion, tags)
-- timeline: clip IDs currently selected (ordered)
-- remaining_time: seconds of budget remaining
-- style: target editing style (highlight, emotional, or balanced)
+SYSTEM_PROMPT = """You are an AI video editor building a montage. You receive:
+- available_clips: clips you can add (id, duration, importance, emotion, motion, tags)
+- timeline: clip IDs currently on the timeline
+- remaining_time: seconds of budget left
+- style: target style (highlight/emotional/balanced)
+- step: current step number
 
-Your goal: build the best montage by selecting, removing, reordering, or trimming clips.
+Rules:
+1. ONLY use "select" to add clips and "finish" to end. Do NOT use "remove".
+2. Pick clips that match the style AND have high importance.
+3. Stop selecting when remaining_time is near 0 or negative.
+4. Call "finish" when you have a good timeline (3-8 clips typically).
+5. For "highlight" style: maximize importance scores.
+6. For "emotional" style: prefer sadness emotion + low motion.
+7. For "balanced" style: prefer happiness emotion + medium motion.
 
-Respond ONLY with a JSON object with these exact keys:
-{
-  "action_type": "select|remove|reorder|trim|finish",
-  "clip_id": "clip_XXX or null",
-  "params": {"i": 0, "j": 1} or {"duration": 5.0} or null,
-  "reasoning": "brief explanation"
-}
-
-Strategy hints:
-- For "highlight" style: prioritize high-importance clips
-- For "emotional" style: prefer sadness emotion + low motion
-- For "balanced" style: prefer happiness emotion + medium motion
-- Stay within remaining_time budget
-- Say "finish" when the timeline is good enough
-- Output raw JSON only, no markdown."""
+Respond with ONLY a JSON object (no markdown):
+{"action_type":"select|finish","clip_id":"clip_XXX or null","params":null}"""
 
 
 def _log(prefix: str, payload: Dict[str, Any]) -> None:
@@ -150,23 +145,28 @@ def _extract_json(text: str) -> Dict[str, Any]:
         return json.loads(text[start : end + 1])
 
 
-def _llm_action(client: "OpenAI", model: str, obs) -> Action:
+def _llm_action(client: "OpenAI", model: str, obs, step_num: int) -> Action:
     """Ask the LLM to pick an action given the current observation."""
+    sorted_clips = sorted(obs.available_clips, key=lambda c: c.importance, reverse=True)[:10]
     obs_summary = {
         "available_clips": [
-            {"id": c.id, "duration": c.duration, "importance": c.importance,
-             "emotion": c.emotion, "motion": c.motion, "tags": c.tags}
-            for c in obs.available_clips[:15]
+            {"id": c.id, "dur": c.duration, "imp": round(c.importance, 2),
+             "emo": c.emotion, "mot": c.motion}
+            for c in sorted_clips
         ],
         "timeline": obs.timeline,
         "remaining_time": round(obs.remaining_time, 1),
         "style": obs.style,
+        "step": step_num,
     }
+
+    if obs.remaining_time <= 0 or not obs.available_clips:
+        return Action(action_type=ActionType.FINISH)
 
     response = client.chat.completions.create(
         model=model,
         temperature=0.0,
-        max_tokens=256,
+        max_tokens=128,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(obs_summary, separators=(",", ":"))},
@@ -176,6 +176,9 @@ def _llm_action(client: "OpenAI", model: str, obs) -> Action:
     parsed = _extract_json(content)
 
     action_type_str = parsed.get("action_type", "finish")
+    if action_type_str not in ("select", "finish"):
+        action_type_str = "finish"
+
     try:
         action_type = ActionType(action_type_str)
     except ValueError:
@@ -207,7 +210,7 @@ def run_task(
         llm_status = "ok"
         if client and client.api_key != "dummy-token":
             try:
-                action = _llm_action(client, model_name, obs)
+                action = _llm_action(client, model_name, obs, step_count + 1)
             except Exception:
                 action = _greedy_action(obs)
                 llm_status = "fallback"
