@@ -1,10 +1,20 @@
-spec_version: 1
 name: montage_env
-type: environment
+version: "1.0.0"
 description: >
   Sequential Video Editing Decision Environment. An agent selects, removes,
   reorders, and trims video clips to assemble an optimal montage under
   duration and style constraints. Three tasks span easy to hard difficulty.
+
+endpoints:
+  reset: /reset
+  step: /step
+  state: /state
+  tasks: /tasks
+  grader: /grader
+  health: /health
+
+spec_version: 1
+type: environment
 
 runtime:
   image: montage-openenv:latest
@@ -52,18 +62,21 @@ tasks:
     description: Select clips that maximize importance within a duration budget.
     clip_count: 15
     target_duration_range: [20.0, 40.0]
+    grader: graders/grader_easy.py::grade_highlight
 
   - name: structured
     difficulty: medium
     description: Arrange clips into a coherent narrative under duration constraints.
     clip_count: 25
     target_duration_range: [30.0, 50.0]
+    grader: graders/grader_medium.py::grade_structured
 
   - name: intent
     difficulty: hard
     description: Style-aware editing with ordering, selection, and trimming constraints.
     clip_count: 30
     target_duration_range: [40.0, 60.0]
+    grader: graders/grader_hard.py::grade_intent
 
 graders:
   highlight: graders/grader_easy.py::grade_highlight

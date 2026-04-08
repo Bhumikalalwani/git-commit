@@ -6,10 +6,10 @@ Environment variables (mandatory for evaluation):
     MODEL_NAME    — model identifier to use for inference
     HF_TOKEN      — API key / bearer token for the LLM provider
 
-The script emits structured stdout logs strictly in three sections:
-    [START] {json}
-    [STEP]  {json}
-    [END]   {json}
+The script emits structured stdout logs in per-task blocks:
+    [START] task=NAME env=NAME model=NAME
+    [STEP]  step=N action=JSON reward=X.XX done=true/false error=null
+    [END]   success=true/false steps=N score=X.XXX rewards=R1,R2,...
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections import OrderedDict
 from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -41,8 +40,8 @@ TASK_DIFFICULTY = {1: "easy", 2: "medium", 3: "hard"}
 BENCHMARK = "montage_env"
 SEED = 42
 MAX_STEPS = 50
-MIN_SCORE = 0.001
-MAX_SCORE = 0.999
+SCORE_FLOOR = 0.001
+SCORE_CEILING = 0.999
 
 SYSTEM_PROMPT = """You are an AI video editor building a montage. You receive:
 - available_clips: clips you can add (id, duration, importance, emotion, motion, tags)
@@ -64,8 +63,33 @@ Respond with ONLY a JSON object (no markdown):
 {"action_type":"select|finish","clip_id":"clip_XXX or null","params":null}"""
 
 
-def _log(prefix: str, payload: Dict[str, Any]) -> None:
-    print(f"{prefix} {json.dumps(payload, ensure_ascii=True, separators=(',', ':'))}", flush=True)
+def _strict_score(value: float) -> float:
+    score = round(float(value), 3)
+    if score <= SCORE_FLOOR:
+        return SCORE_FLOOR
+    if score >= SCORE_CEILING:
+        return SCORE_CEILING
+    return score
+
+
+def _log_start(task_name: str, model_name: str) -> None:
+    print(f"[START] task={task_name} env={BENCHMARK} model={model_name}", flush=True)
+
+
+def _log_step(step: int, action: str, reward: float, done: bool, error: str | None) -> None:
+    error_val = error if error is not None else "null"
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={str(done).lower()} error={error_val}",
+        flush=True,
+    )
+
+
+def _log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
 
 
 def _load_config() -> Tuple[Dict[str, str], List[str]]:
@@ -96,10 +120,6 @@ def _build_client(config: Dict[str, str]) -> "OpenAI | None":
         return OpenAI(base_url=config["API_BASE_URL"], api_key=token)
     except Exception:
         return None
-
-
-def _normalize_score(raw: float) -> float:
-    return round(min(max(float(raw), MIN_SCORE), MAX_SCORE), 4)
 
 
 def _compute_ideal_order(clips_map: Dict[str, Clip], style: str, target_duration: float) -> List[str]:
@@ -191,6 +211,13 @@ def _llm_action(client: "OpenAI", model: str, obs, step_num: int) -> Action:
     )
 
 
+def _format_action(action: Action) -> str:
+    d: Dict[str, Any] = {"action_type": action.action_type.value}
+    if action.clip_id:
+        d["clip_id"] = action.clip_id
+    return json.dumps(d, separators=(",", ":"))
+
+
 def run_task(
     client: "OpenAI | None",
     model_name: str,
@@ -199,134 +226,101 @@ def run_task(
     task_name = TASK_MAP[task_id]
     difficulty = TASK_DIFFICULTY[task_id]
 
+    _log_start(task_name, model_name)
+
     env = MontageEnv(task_name=task_name, seed=SEED)
     obs = env.reset()
 
     rewards: List[float] = []
     step_count = 0
     done = False
+    success = False
+    score = SCORE_FLOOR
 
-    while not done and step_count < MAX_STEPS:
-        llm_status = "ok"
-        if client and client.api_key != "dummy-token":
-            try:
-                action = _llm_action(client, model_name, obs, step_count + 1)
-            except Exception:
+    try:
+        while not done and step_count < MAX_STEPS:
+            error_msg: str | None = None
+            if client and client.api_key != "dummy-token":
+                try:
+                    action = _llm_action(client, model_name, obs, step_count + 1)
+                except Exception as exc:
+                    error_msg = str(exc)
+                    action = _greedy_action(obs)
+            else:
                 action = _greedy_action(obs)
-                llm_status = "fallback"
+
+            obs = env.step(action)
+            reward = _strict_score(obs.reward if obs.reward is not None else SCORE_FLOOR)
+            done = obs.done
+            step_count += 1
+            rewards.append(reward)
+
+            _log_step(step_count, _format_action(action), reward, done, error_msg)
+
+        if not done:
+            action = Action(action_type=ActionType.FINISH)
+            obs = env.step(action)
+            step_count += 1
+            reward = _strict_score(obs.reward if obs.reward is not None else SCORE_FLOOR)
+            rewards.append(reward)
+            _log_step(step_count, _format_action(action), reward, True, None)
+
+        state = env.state
+        clips_map = env.state_manager.available_clips
+        timeline = list(state.timeline)
+        target_dur = state.target_duration
+        style = state.style
+        ideal_order = _compute_ideal_order(clips_map, style, target_dur)
+
+        if task_name == "highlight":
+            score = _strict_score(grade_highlight(timeline, clips_map, target_dur))
+        elif task_name == "structured":
+            score = _strict_score(grade_structured(timeline, ideal_order))
+        elif task_name == "intent":
+            score = _strict_score(grade_intent(timeline, clips_map, style, ideal_order))
         else:
-            action = _greedy_action(obs)
-            llm_status = "greedy"
+            score = _strict_score(rewards[-1] if rewards else SCORE_FLOOR)
 
-        obs = env.step(action)
-        reward = _normalize_score(obs.reward if obs.reward is not None else 0.001)
-        done = obs.done
+        success = done and score > 0.01
+
+    except Exception as exc:
+        score = SCORE_FLOOR
+        _log_step(step_count + 1, '{"action_type":"finish"}', 0.01, True, str(exc))
+        rewards.append(0.01)
         step_count += 1
-        rewards.append(reward)
 
-        _log("[STEP]", OrderedDict([
-            ("task_id", task_id),
-            ("task_name", task_name),
-            ("step", step_count),
-            ("action", action.action_type.value),
-            ("grader_score", round(reward, 4)),
-            ("reward_score", round(reward, 4)),
-            ("reward", round(reward, 4)),
-            ("done", done),
-            ("llm_status", llm_status),
-        ]))
-
-    if not done:
-        obs = env.step(Action(action_type=ActionType.FINISH))
-        step_count += 1
-        reward = _normalize_score(obs.reward if obs.reward is not None else 0.001)
-        rewards.append(reward)
-        _log("[STEP]", OrderedDict([
-            ("task_id", task_id),
-            ("task_name", task_name),
-            ("step", step_count),
-            ("action", "finish"),
-            ("grader_score", round(reward, 4)),
-            ("reward_score", round(reward, 4)),
-            ("reward", round(reward, 4)),
-            ("done", True),
-            ("llm_status", "greedy"),
-        ]))
-
-    state = env.state
-    clips_map = env.state_manager.available_clips
-    timeline = list(state.timeline)
-    target_dur = state.target_duration
-    style = state.style
-    ideal_order = _compute_ideal_order(clips_map, style, target_dur)
-
-    if task_name == "highlight":
-        grader_score = grade_highlight(timeline, clips_map, target_dur)
-    elif task_name == "structured":
-        grader_score = grade_structured(timeline, ideal_order)
-    elif task_name == "intent":
-        grader_score = grade_intent(timeline, clips_map, style, ideal_order)
-    else:
-        grader_score = reward
-
-    grader_score = _normalize_score(grader_score)
-    final_reward = _normalize_score(rewards[-1] if rewards else 0.0)
+    _log_end(success=success, steps=step_count, score=score, rewards=rewards)
 
     return {
         "task_id": task_id,
         "task_name": task_name,
         "difficulty": difficulty,
         "steps": step_count,
-        "total_reward": round(sum(rewards), 4),
-        "average_reward": round(sum(rewards) / max(step_count, 1), 4),
-        "grader_score": grader_score,
-        "final_reward": final_reward,
+        "score": score,
+        "success": success,
     }
 
 
-def run_inference() -> Dict[str, float]:
-    config, warnings = _load_config()
+def main() -> int:
+    config, _ = _load_config()
     client = _build_client(config)
-
-    _log("[START]", OrderedDict([
-        ("script", "inference.py"),
-        ("env", BENCHMARK),
-        ("api_base_url", config["API_BASE_URL"]),
-        ("model_name", config["MODEL_NAME"]),
-        ("tasks", list(TASK_IDS)),
-        ("seed", SEED),
-        ("warnings", warnings),
-    ]))
-
-    results: Dict[str, float] = {}
-    total_score = 0.0
+    model_name = config["MODEL_NAME"]
 
     for task_id in TASK_IDS:
-        task_result = run_task(client, config["MODEL_NAME"], task_id)
-        score = task_result["grader_score"]
-        results[f"task_{task_id}"] = score
-        total_score += score
+        run_task(client, model_name, task_id)
 
-    average_score = round(total_score / len(TASK_IDS), 4)
-
-    _log("[END]", OrderedDict([
-        ("task_results", results),
-        ("average_score", average_score),
-        ("status", "success"),
-    ]))
-
-    return results
+    return 0
 
 
 if __name__ == "__main__":
     try:
-        run_inference()
+        raise SystemExit(main())
+    except SystemExit:
+        raise
     except Exception as exc:
-        fallback = {"task_1": 0.001, "task_2": 0.001, "task_3": 0.001}
-        _log("[END]", OrderedDict([
-            ("task_results", fallback),
-            ("average_score", 0.001),
-            ("status", "error"),
-            ("error", str(exc)),
-        ]))
+        for tid in TASK_IDS:
+            tname = TASK_MAP[tid]
+            _log_start(tname, os.getenv("MODEL_NAME", "gpt-4o-mini"))
+            _log_step(1, '{"action_type":"finish"}', 0.01, True, str(exc))
+            _log_end(success=False, steps=1, score=SCORE_FLOOR, rewards=[0.01])
         sys.exit(0)

@@ -4,13 +4,15 @@ Endpoints:
     POST /reset   — Start a new episode
     POST /step    — Execute an action
     GET  /state   — Retrieve current episode state
+    GET  /tasks   — List available tasks
+    GET  /grader  — Grade the current episode
     GET  /health  — Liveness probe
     GET  /        — Human-readable landing page
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -19,12 +21,17 @@ from pydantic import BaseModel
 from env.models import (
     Action,
     ActionType,
+    Clip,
     Observation,
     ResetRequest,
     State,
     StepRequest,
 )
 from env.montage_env import MontageEnv
+from graders.grader_easy import grade_highlight
+from graders.grader_hard import grade_intent
+from graders.grader_medium import grade_structured
+from infra.utils import check_style_alignment
 
 app = FastAPI(
     title="Montage OpenEnv",
@@ -33,6 +40,37 @@ app = FastAPI(
 )
 
 _env: Optional[MontageEnv] = None
+
+TASKS_META = [
+    {"id": 1, "name": "highlight", "difficulty": "easy",
+     "description": "Select clips that maximize importance within a duration budget."},
+    {"id": 2, "name": "structured", "difficulty": "medium",
+     "description": "Arrange clips into a coherent narrative under duration constraints."},
+    {"id": 3, "name": "intent", "difficulty": "hard",
+     "description": "Style-aware editing with ordering, selection, and trimming constraints."},
+]
+
+
+def _strict_score(value: float) -> float:
+    score = round(float(value), 4)
+    return max(0.001, min(0.999, score))
+
+
+def _compute_ideal_order(clips_map: Dict[str, Clip], style: str, target_duration: float) -> List[str]:
+    from typing import Tuple as T
+    scored: list[tuple[float, str]] = []
+    for cid, clip in clips_map.items():
+        s = check_style_alignment([cid], clips_map, style)
+        combined = 0.5 * clip.importance + 0.5 * s
+        scored.append((combined, cid))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    ideal: list[str] = []
+    dur = 0.0
+    for _sc, cid in scored:
+        if dur + clips_map[cid].duration <= target_duration + 5:
+            ideal.append(cid)
+            dur += clips_map[cid].duration
+    return ideal
 
 
 class ResetResponse(BaseModel):
@@ -124,3 +162,33 @@ def get_state():
     if _env is None:
         raise HTTPException(status_code=400, detail="No active episode. Call POST /reset first.")
     return _env.state
+
+
+@app.get("/tasks")
+def list_tasks():
+    return {"tasks": TASKS_META}
+
+
+@app.get("/grader")
+def grader():
+    if _env is None:
+        raise HTTPException(status_code=400, detail="No active episode. Call POST /reset first.")
+    state = _env.state
+    clips_map = _env.state_manager.available_clips
+    timeline = list(state.timeline)
+    target_dur = state.target_duration
+    style = state.style
+    task_name = state.task_name
+    ideal_order = _compute_ideal_order(clips_map, style, target_dur)
+
+    if task_name == "highlight":
+        raw = grade_highlight(timeline, clips_map, target_dur)
+    elif task_name == "structured":
+        raw = grade_structured(timeline, ideal_order)
+    elif task_name == "intent":
+        raw = grade_intent(timeline, clips_map, style, ideal_order)
+    else:
+        raw = 0.5
+
+    score = _strict_score(raw)
+    return {"score": score, "task_name": task_name, "done": state.done}
