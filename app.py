@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -85,8 +85,13 @@ def health():
 
 
 @app.post("/reset", response_model=ResetResponse)
-def reset(req: ResetRequest):
+async def reset(request: Request):
     global _env
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    req = ResetRequest(**(body or {}))
     _env = MontageEnv(task_name=req.task_name, seed=req.seed)
     obs = _env.reset()
     return ResetResponse(
@@ -97,9 +102,14 @@ def reset(req: ResetRequest):
 
 
 @app.post("/step", response_model=StepResponse)
-def step(req: StepRequest):
+async def step(request: Request):
     if _env is None:
         raise HTTPException(status_code=400, detail="No active episode. Call POST /reset first.")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body with action is required.")
+    req = StepRequest(**body)
     obs = _env.step(req.action)
     return StepResponse(
         observation=obs,
